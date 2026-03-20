@@ -31,11 +31,12 @@ func DiscoverInstances(profiles []config.SSOProfile) ([]Instance, error) {
 	defer cancel()
 
 	var (
-		mu       sync.Mutex
-		all      []Instance
-		errs     []string
-		ssoErr   string // first SSO error message (used for early exit)
-		wg       sync.WaitGroup
+		mu         sync.Mutex
+		all        []Instance
+		errs       []string
+		ssoErr     bool
+		ssoSession string // SSO session name for login hint
+		wg         sync.WaitGroup
 	)
 
 	for _, p := range profiles {
@@ -49,8 +50,9 @@ func DiscoverInstances(profiles []config.SSOProfile) ([]Instance, error) {
 			if err != nil {
 				errMsg := fmt.Sprintf("[%s] %v", prof.Name, err)
 				if isSSOTokenError(errMsg) {
-					if ssoErr == "" {
-						ssoErr = err.Error()
+					if !ssoErr {
+						ssoErr = true
+						ssoSession = prof.SSOSession
 						cancel() // cancel all other in-flight requests
 					}
 				} else if ctx.Err() == nil {
@@ -65,8 +67,11 @@ func DiscoverInstances(profiles []config.SSOProfile) ([]Instance, error) {
 
 	wg.Wait()
 
-	// SSO token error — return a single clear message
-	if ssoErr != "" {
+	// SSO token error — return a single clear message with login command
+	if ssoErr {
+		if ssoSession != "" {
+			return nil, fmt.Errorf("SSO token expired. Run: aws sso login --sso-session %s", ssoSession)
+		}
 		return nil, fmt.Errorf("SSO token expired. Run: aws sso login")
 	}
 

@@ -11,11 +11,12 @@ import (
 
 // SSOProfile represents an AWS SSO profile from ~/.aws/config.
 type SSOProfile struct {
-	Name      string // profile name (e.g., "dev-admin")
-	AccountID string
-	RoleName  string
-	Region    string // region for this profile (falls back to sso_session region)
-	SSORegion string // SSO endpoint region
+	Name       string // profile name (e.g., "dev-admin")
+	AccountID  string
+	RoleName   string
+	Region     string // region for this profile (falls back to sso_session region)
+	SSORegion  string // SSO endpoint region
+	SSOSession string // sso-session name (for login hint)
 }
 
 // LoadSSOProfiles parses ~/.aws/config and returns all SSO-configured profiles.
@@ -68,11 +69,12 @@ func LoadSSOProfiles() ([]SSOProfile, error) {
 
 		region := section.Key("region").String()
 		ssoRegion := section.Key("sso_region").String()
+		ssoSession := section.Key("sso_session").String()
 
 		// Fall back to sso-session region
 		if ssoRegion == "" {
-			if sessionName := section.Key("sso_session").String(); sessionName != "" {
-				ssoRegion = ssoSessionRegions[sessionName]
+			if ssoSession != "" {
+				ssoRegion = ssoSessionRegions[ssoSession]
 			}
 		}
 		if region == "" {
@@ -80,11 +82,12 @@ func LoadSSOProfiles() ([]SSOProfile, error) {
 		}
 
 		profiles = append(profiles, SSOProfile{
-			Name:      profileName,
-			AccountID: accountID,
-			RoleName:  roleName,
-			Region:    region,
-			SSORegion: ssoRegion,
+			Name:       profileName,
+			AccountID:  accountID,
+			RoleName:   roleName,
+			Region:     region,
+			SSORegion:  ssoRegion,
+			SSOSession: ssoSession,
 		})
 	}
 
