@@ -25,13 +25,16 @@ type Instance struct {
 }
 
 // DiscoverInstances finds SSM-managed EC2 instances across all given profiles.
+// If an SSO token error is detected, it cancels all in-flight requests immediately.
 func DiscoverInstances(profiles []config.SSOProfile) ([]Instance, error) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	var (
 		mu       sync.Mutex
 		all      []Instance
 		errs     []string
+		ssoErr   string // first SSO error message (used for early exit)
 		wg       sync.WaitGroup
 	)
 
@@ -44,7 +47,16 @@ func DiscoverInstances(profiles []config.SSOProfile) ([]Instance, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
-				errs = append(errs, fmt.Sprintf("[%s] %v", prof.Name, err))
+				errMsg := fmt.Sprintf("[%s] %v", prof.Name, err)
+				if isSSOTokenError(errMsg) {
+					if ssoErr == "" {
+						ssoErr = err.Error()
+						cancel() // cancel all other in-flight requests
+					}
+				} else if ctx.Err() == nil {
+					// Only collect non-SSO errors if we haven't cancelled
+					errs = append(errs, errMsg)
+				}
 				return
 			}
 			all = append(all, instances...)
@@ -52,6 +64,11 @@ func DiscoverInstances(profiles []config.SSOProfile) ([]Instance, error) {
 	}
 
 	wg.Wait()
+
+	// SSO token error — return a single clear message
+	if ssoErr != "" {
+		return nil, fmt.Errorf("SSO token expired. Run: aws sso login")
+	}
 
 	// Print warnings for failed profiles but don't fail entirely
 	if len(errs) > 0 && len(all) == 0 {
@@ -62,6 +79,15 @@ func DiscoverInstances(profiles []config.SSOProfile) ([]Instance, error) {
 	}
 
 	return all, nil
+}
+
+// isSSOTokenError checks if an error string indicates an SSO token/credential refresh failure.
+func isSSOTokenError(errStr string) bool {
+	lower := strings.ToLower(errStr)
+	return strings.Contains(lower, "refresh cached sso token") ||
+		strings.Contains(lower, "invalidgrantexception") ||
+		strings.Contains(lower, "sso token expired") ||
+		strings.Contains(lower, "no cached sso token")
 }
 
 func discoverForProfile(ctx context.Context, prof config.SSOProfile) ([]Instance, error) {
