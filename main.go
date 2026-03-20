@@ -66,12 +66,7 @@ func runProfileMode(nameFilter string, noCache bool) error {
 	cacheKey := "profiles_" + strings.Join(names, "_")
 
 	instances, err := loadOrDiscover(cacheKey, noCache, func() ([]ssmaws.Instance, error) {
-		profileNames := make([]string, len(profiles))
-		for i, p := range profiles {
-			profileNames[i] = p.Name
-		}
-		msg := fmt.Sprintf("Searching %d profiles (%s)...",
-			len(profiles), strings.Join(profileNames, ", "))
+		msg := fmt.Sprintf("Searching %d profiles...", len(profiles))
 		sp := ui.NewSpinner(msg)
 		defer sp.Stop()
 
