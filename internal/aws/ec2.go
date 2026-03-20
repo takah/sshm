@@ -1,0 +1,183 @@
+package aws
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/takah/sshm/internal/config"
+)
+
+// Instance represents an EC2 instance that is reachable via SSM.
+type Instance struct {
+	InstanceID   string
+	Name         string
+	PrivateIP    string
+	InstanceType string
+	State        string
+	Profile      config.SSOProfile // which AWS profile to use for connection
+}
+
+// DiscoverInstances finds SSM-managed EC2 instances across all given profiles.
+func DiscoverInstances(profiles []config.SSOProfile) ([]Instance, error) {
+	ctx := context.Background()
+
+	var (
+		mu       sync.Mutex
+		all      []Instance
+		errs     []string
+		wg       sync.WaitGroup
+	)
+
+	for _, p := range profiles {
+		wg.Add(1)
+		go func(prof config.SSOProfile) {
+			defer wg.Done()
+
+			instances, err := discoverForProfile(ctx, prof)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("[%s] %v", prof.Name, err))
+				return
+			}
+			all = append(all, instances...)
+		}(p)
+	}
+
+	wg.Wait()
+
+	// Print warnings for failed profiles but don't fail entirely
+	if len(errs) > 0 && len(all) == 0 {
+		return nil, fmt.Errorf("all profiles failed:\n  %s", strings.Join(errs, "\n  "))
+	}
+	for _, e := range errs {
+		fmt.Printf("Warning: %s\n", e)
+	}
+
+	return all, nil
+}
+
+func discoverForProfile(ctx context.Context, prof config.SSOProfile) ([]Instance, error) {
+	cfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithSharedConfigProfile(prof.Name),
+		awsconfig.WithRegion(prof.Region),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("loading config: %w", err)
+	}
+
+	return discoverWithConfig(ctx, cfg, prof)
+}
+
+// discoverWithConfig finds SSM-managed instances using the given AWS config.
+func discoverWithConfig(ctx context.Context, cfg aws.Config, prof config.SSOProfile) ([]Instance, error) {
+	// Get SSM-managed instance IDs
+	ssmClient := ssm.NewFromConfig(cfg)
+	managedIDs, err := getManagedInstanceIDs(ctx, ssmClient)
+	if err != nil {
+		return nil, fmt.Errorf("listing SSM instances: %w", err)
+	}
+	if len(managedIDs) == 0 {
+		return nil, nil
+	}
+
+	// Get EC2 instance details
+	ec2Client := ec2.NewFromConfig(cfg)
+	return getInstanceDetails(ctx, ec2Client, managedIDs, prof)
+}
+
+func getManagedInstanceIDs(ctx context.Context, client *ssm.Client) (map[string]bool, error) {
+	ids := make(map[string]bool)
+	paginator := ssm.NewDescribeInstanceInformationPaginator(client, &ssm.DescribeInstanceInformationInput{})
+
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, info := range page.InstanceInformationList {
+			if info.InstanceId != nil {
+				ids[*info.InstanceId] = true
+			}
+		}
+	}
+	return ids, nil
+}
+
+func getInstanceDetails(ctx context.Context, client *ec2.Client, managedIDs map[string]bool, prof config.SSOProfile) ([]Instance, error) {
+	var instances []Instance
+
+	paginator := ec2.NewDescribeInstancesPaginator(client, &ec2.DescribeInstancesInput{
+		Filters: []ec2Types.Filter{
+			{
+				Name:   aws.String("instance-state-name"),
+				Values: []string{"running"},
+			},
+		},
+	})
+
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, reservation := range page.Reservations {
+			for _, inst := range reservation.Instances {
+				if inst.InstanceId == nil {
+					continue
+				}
+				if !managedIDs[*inst.InstanceId] {
+					continue
+				}
+
+				name := ""
+				for _, tag := range inst.Tags {
+					if tag.Key != nil && *tag.Key == "Name" && tag.Value != nil {
+						name = *tag.Value
+						break
+					}
+				}
+
+				privateIP := ""
+				if inst.PrivateIpAddress != nil {
+					privateIP = *inst.PrivateIpAddress
+				}
+
+				instanceType := ""
+				if inst.InstanceType != "" {
+					instanceType = string(inst.InstanceType)
+				}
+
+				instances = append(instances, Instance{
+					InstanceID:   *inst.InstanceId,
+					Name:         name,
+					PrivateIP:    privateIP,
+					InstanceType: instanceType,
+					State:        "running",
+					Profile:      prof,
+				})
+			}
+		}
+	}
+
+	return instances, nil
+}
+
+// FilterByName returns instances whose Name contains the filter string (case-insensitive).
+func FilterByName(instances []Instance, filter string) []Instance {
+	filter = strings.ToLower(filter)
+	var matched []Instance
+	for _, inst := range instances {
+		if strings.Contains(strings.ToLower(inst.Name), filter) {
+			matched = append(matched, inst)
+		}
+	}
+	return matched
+}
