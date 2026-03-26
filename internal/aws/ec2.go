@@ -87,15 +87,29 @@ func DiscoverInstances(profiles []config.SSOProfile) ([]Instance, error) {
 }
 
 // isSSOTokenError checks if an error string indicates an SSO token/credential refresh failure.
+// It must distinguish genuine token issues from account-level access denials (e.g.,
+// ForbiddenException: No access when the user simply lacks permission on that account/role).
 func isSSOTokenError(errStr string) bool {
 	lower := strings.ToLower(errStr)
-	return strings.Contains(lower, "refresh cached sso token") ||
+
+	// Definitive SSO token issues
+	if strings.Contains(lower, "refresh cached sso token") ||
 		strings.Contains(lower, "cached sso token file") ||
 		strings.Contains(lower, "invalidgrantexception") ||
 		strings.Contains(lower, "sso token expired") ||
-		strings.Contains(lower, "no cached sso token") ||
-		strings.Contains(lower, "failed to refresh cached credentials") ||
-		strings.Contains(lower, "forbiddenexception")
+		strings.Contains(lower, "no cached sso token") {
+		return true
+	}
+
+	// ForbiddenException from SSO GetRoleCredentials can mean either an expired/invalid
+	// token OR simply no access to that account/role. Only treat it as an SSO token error
+	// if it's NOT a "No access" denial (which indicates a permissions issue, not a token issue).
+	if strings.Contains(lower, "failed to refresh cached credentials") &&
+		strings.Contains(lower, "forbiddenexception") {
+		return !strings.Contains(lower, "no access")
+	}
+
+	return false
 }
 
 func discoverForProfile(ctx context.Context, prof config.SSOProfile) ([]Instance, error) {
