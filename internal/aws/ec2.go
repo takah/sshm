@@ -90,6 +90,7 @@ func DiscoverInstances(profiles []config.SSOProfile) ([]Instance, error) {
 func isSSOTokenError(errStr string) bool {
 	lower := strings.ToLower(errStr)
 	return strings.Contains(lower, "refresh cached sso token") ||
+		strings.Contains(lower, "cached sso token file") ||
 		strings.Contains(lower, "invalidgrantexception") ||
 		strings.Contains(lower, "sso token expired") ||
 		strings.Contains(lower, "no cached sso token")
