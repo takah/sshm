@@ -93,7 +93,9 @@ func isSSOTokenError(errStr string) bool {
 		strings.Contains(lower, "cached sso token file") ||
 		strings.Contains(lower, "invalidgrantexception") ||
 		strings.Contains(lower, "sso token expired") ||
-		strings.Contains(lower, "no cached sso token")
+		strings.Contains(lower, "no cached sso token") ||
+		strings.Contains(lower, "failed to refresh cached credentials") ||
+		strings.Contains(lower, "forbiddenexception")
 }
 
 func discoverForProfile(ctx context.Context, prof config.SSOProfile) ([]Instance, error) {
