@@ -75,11 +75,19 @@ func DiscoverInstances(profiles []config.SSOProfile) ([]Instance, error) {
 		return nil, fmt.Errorf("SSO token expired. Run: aws sso login")
 	}
 
-	// Print warnings for failed profiles but don't fail entirely
-	if len(errs) > 0 && len(all) == 0 {
-		return nil, fmt.Errorf("all profiles failed:\n  %s", strings.Join(errs, "\n  "))
-	}
+	// Print warnings for failed profiles but don't fail entirely.
+	// Skip "No access" errors when some instances were found — those are expected
+	// for profiles the user simply doesn't have permission on.
+	var realErrs []string
 	for _, e := range errs {
+		if !isNoAccessError(e) {
+			realErrs = append(realErrs, e)
+		}
+	}
+	if len(realErrs) > 0 && len(all) == 0 {
+		return nil, fmt.Errorf("all profiles failed:\n  %s", strings.Join(realErrs, "\n  "))
+	}
+	for _, e := range realErrs {
 		fmt.Printf("Warning: %s\n", e)
 	}
 
@@ -110,6 +118,14 @@ func isSSOTokenError(errStr string) bool {
 	}
 
 	return false
+}
+
+// isNoAccessError returns true when the error is a plain permission denial
+// (ForbiddenException: No access) rather than a token or credential issue.
+func isNoAccessError(errStr string) bool {
+	lower := strings.ToLower(errStr)
+	return strings.Contains(lower, "forbiddenexception") &&
+		strings.Contains(lower, "no access")
 }
 
 func discoverForProfile(ctx context.Context, prof config.SSOProfile) ([]Instance, error) {

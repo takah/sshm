@@ -15,6 +15,33 @@ import (
 	"github.com/takah/sshm/internal/ui"
 )
 
+// isDocumentListMode returns true when -d/--document is given without a value.
+func isDocumentListMode() bool {
+	args := os.Args[1:]
+	for i, arg := range args {
+		if arg == "-d" || arg == "--document" {
+			return i+1 >= len(args) || strings.HasPrefix(args[i+1], "-")
+		}
+	}
+	return false
+}
+
+func printDocumentList(cfg *config.SSHMConfig) {
+	fmt.Printf("Config: %s\n\n", cfg.Path)
+	if len(cfg.Documents) == 0 {
+		fmt.Println("No documents configured.")
+		fmt.Println("Add entries to your config file:")
+		fmt.Println("")
+		fmt.Println("  documents:")
+		fmt.Println("    admin: SSM-SessionManagerRunShellAsAdmin")
+		return
+	}
+	fmt.Println("Configured documents:")
+	for short, full := range cfg.Documents {
+		fmt.Printf("  %-20s %s\n", short, full)
+	}
+}
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -23,8 +50,21 @@ func main() {
 }
 
 func run() error {
-	discover := flag.Bool("d", false, "Discover accounts/roles via SSO API (no config profiles needed)")
+	sshmCfg, err := config.LoadSSHMConfig()
+	if err != nil {
+		return err
+	}
+
+	// Handle -d/--document without a value before flag.Parse() to avoid parse error.
+	if isDocumentListMode() {
+		printDocumentList(sshmCfg)
+		return nil
+	}
+
+	discover := flag.Bool("D", false, "Discover accounts/roles via SSO API (no config profiles needed)")
 	flag.BoolVar(discover, "discover", false, "Discover accounts/roles via SSO API (no config profiles needed)")
+	documentArg := flag.String("d", "", "SSM document name or short name (defined in ~/.config/sshm/config.yml)")
+	flag.StringVar(documentArg, "document", "", "SSM document name or short name (defined in ~/.config/sshm/config.yml)")
 	noCache := flag.Bool("update-cache", false, "Refresh cached instance list")
 	clearCache := flag.Bool("clear-cache", false, "Clear all cached data and exit")
 	flag.Parse()
@@ -37,16 +77,18 @@ func run() error {
 		return nil
 	}
 
+	documentName := sshmCfg.ResolveDocument(*documentArg)
+
 	nameFilter := flag.Arg(0)
 
 	if *discover {
-		return runDiscoverMode(nameFilter, *noCache)
+		return runDiscoverMode(nameFilter, *noCache, documentName)
 	}
-	return runProfileMode(nameFilter, *noCache)
+	return runProfileMode(nameFilter, *noCache, documentName)
 }
 
 // runProfileMode uses ~/.aws/config profiles to find instances.
-func runProfileMode(nameFilter string, noCache bool) error {
+func runProfileMode(nameFilter string, noCache bool, documentName string) error {
 	profiles, err := config.LoadSSOProfiles()
 	if err != nil {
 		return fmt.Errorf("loading AWS profiles: %w", err)
@@ -79,11 +121,11 @@ func runProfileMode(nameFilter string, noCache bool) error {
 		return fmt.Errorf("no SSM-managed instances found")
 	}
 
-	return selectAndConnect(instances, nameFilter)
+	return selectAndConnect(instances, nameFilter, documentName)
 }
 
 // runDiscoverMode uses SSO API to interactively pick account/role/region, then find instances.
-func runDiscoverMode(nameFilter string, noCache bool) error {
+func runDiscoverMode(nameFilter string, noCache bool, documentName string) error {
 	ctx := context.Background()
 
 	// 1. Find SSO sessions
@@ -207,7 +249,7 @@ func runDiscoverMode(nameFilter string, noCache bool) error {
 		return fmt.Errorf("no SSM-managed instances found")
 	}
 
-	return selectAndConnect(instances, nameFilter)
+	return selectAndConnect(instances, nameFilter, documentName)
 }
 
 // loadOrDiscover tries to load instances from cache, falling back to the discover function.
@@ -237,14 +279,14 @@ func loadOrDiscover(cacheKey string, noCache bool, discover func() ([]ssmaws.Ins
 	return instances, nil
 }
 
-func selectAndConnect(instances []ssmaws.Instance, nameFilter string) error {
+func selectAndConnect(instances []ssmaws.Instance, nameFilter string, documentName string) error {
 	if nameFilter != "" {
 		instances = ssmaws.FilterByName(instances, nameFilter)
 		if len(instances) == 0 {
 			return fmt.Errorf("no instances matching %q", nameFilter)
 		}
 		if len(instances) == 1 {
-			return ssmaws.StartSession(instances[0])
+			return ssmaws.StartSession(instances[0], documentName)
 		}
 	}
 
@@ -252,5 +294,5 @@ func selectAndConnect(instances []ssmaws.Instance, nameFilter string) error {
 	if err != nil {
 		return err
 	}
-	return ssmaws.StartSession(selected)
+	return ssmaws.StartSession(selected, documentName)
 }

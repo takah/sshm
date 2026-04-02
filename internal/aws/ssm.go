@@ -14,22 +14,23 @@ import (
 )
 
 // StartSession starts an SSM session to the given instance.
+// documentName specifies the SSM document to use; empty string uses the AWS default.
 // If the instance has a named profile, uses aws cli directly.
 // Otherwise, starts the session via the SDK and session-manager-plugin.
-func StartSession(inst Instance) error {
+func StartSession(inst Instance, documentName string) error {
 	fmt.Printf("Connecting to %s (%s) via %s...\n",
 		inst.Name, inst.InstanceID, inst.Profile.Name)
 
 	// If we have a real profile name (not "accountID/roleName"), use aws cli
 	if inst.Profile.Name != "" && inst.Profile.RoleName == "" {
-		return startWithCLI(inst)
+		return startWithCLI(inst, documentName)
 	}
 	if inst.Profile.Name != "" && !isDiscoverProfile(inst.Profile.Name) {
-		return startWithCLI(inst)
+		return startWithCLI(inst, documentName)
 	}
 
 	// Discover mode: use SDK to start session
-	return startWithSDK(inst)
+	return startWithSDK(inst, documentName)
 }
 
 func isDiscoverProfile(name string) bool {
@@ -42,7 +43,7 @@ func isDiscoverProfile(name string) bool {
 	return false
 }
 
-func startWithCLI(inst Instance) error {
+func startWithCLI(inst Instance, documentName string) error {
 	awsBin, err := exec.LookPath("aws")
 	if err != nil {
 		return fmt.Errorf("aws cli not found in PATH: %w", err)
@@ -56,11 +57,14 @@ func startWithCLI(inst Instance) error {
 	if inst.Profile.Region != "" {
 		args = append(args, "--region", inst.Profile.Region)
 	}
+	if documentName != "" {
+		args = append(args, "--document-name", documentName)
+	}
 
 	return syscall.Exec(awsBin, args, os.Environ())
 }
 
-func startWithSDK(inst Instance) error {
+func startWithSDK(inst Instance, documentName string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -72,9 +76,13 @@ func startWithSDK(inst Instance) error {
 	}
 
 	ssmClient := ssm.NewFromConfig(cfg)
-	out, err := ssmClient.StartSession(ctx, &ssm.StartSessionInput{
+	input := &ssm.StartSessionInput{
 		Target: &inst.InstanceID,
-	})
+	}
+	if documentName != "" {
+		input.DocumentName = &documentName
+	}
+	out, err := ssmClient.StartSession(ctx, input)
 	if err != nil {
 		return fmt.Errorf("starting session: %w", err)
 	}

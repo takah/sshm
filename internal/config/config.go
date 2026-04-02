@@ -7,7 +7,49 @@ import (
 	"strings"
 
 	"gopkg.in/ini.v1"
+	"gopkg.in/yaml.v3"
 )
+
+// SSHMConfig holds sshm-specific configuration from ~/.config/sshm/config.yml.
+type SSHMConfig struct {
+	Documents map[string]string `yaml:"documents"`
+	Path      string            `yaml:"-"` // path to the config file (set by LoadSSHMConfig)
+}
+
+// LoadSSHMConfig reads ~/.config/sshm/config.yml.
+// Returns an empty config if the file does not exist.
+func LoadSSHMConfig() (*SSHMConfig, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return &SSHMConfig{Documents: map[string]string{}}, nil
+	}
+	path := filepath.Join(home, ".config", "sshm", "config.yml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &SSHMConfig{Documents: map[string]string{}, Path: path}, nil
+		}
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	var cfg SSHMConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	if cfg.Documents == nil {
+		cfg.Documents = map[string]string{}
+	}
+	cfg.Path = path
+	return &cfg, nil
+}
+
+// ResolveDocument returns the full document name for the given short name.
+// If the name is not in the map, it is returned as-is.
+func (c *SSHMConfig) ResolveDocument(name string) string {
+	if full, ok := c.Documents[name]; ok {
+		return full
+	}
+	return name
+}
 
 // SSOProfile represents an AWS SSO profile from ~/.aws/config.
 type SSOProfile struct {
