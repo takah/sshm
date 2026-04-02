@@ -8,7 +8,8 @@ A CLI tool to connect to EC2 instances via AWS SSM Session Manager with a human-
 - **Multi-account support** — discovers instances across all SSO-configured AWS accounts
 - **Two modes of operation:**
   - **Profile mode** (default): uses `~/.aws/config` SSO profiles
-  - **Discover mode** (`-d`): dynamically lists accounts/roles via SSO API — no profiles needed
+  - **Discover mode** (`-D`): dynamically lists accounts/roles via SSO API — no profiles needed
+- **Custom SSM documents** — specify a document with `-d`; define short aliases in `~/.config/sshm/config.yml`
 - **Local caching** — instance lists are cached for 30 days for instant startup
 - **Name filtering** — pass a name pattern as an argument to skip the menu
 
@@ -41,11 +42,20 @@ sshm
 # Filter by name — connect directly if single match
 sshm web-server
 
-# Discover mode — pick account/role/region via SSO API (no profiles needed)
+# Connect using a specific SSM document
+sshm -d SSM-SessionManagerRunShellAsAdmin
+
+# Connect using a short alias defined in ~/.config/sshm/config.yml
+sshm -d admin
+
+# List configured document aliases
 sshm -d
 
+# Discover mode — pick account/role/region via SSO API (no profiles needed)
+sshm -D
+
 # Discover mode with name filter
-sshm -d api
+sshm -D api
 
 # Refresh cached instance list
 sshm --update-cache
@@ -63,7 +73,7 @@ sshm --clear-cache
 3. Presents an interactive list with filtering
 4. Connects via `aws ssm start-session`
 
-### Discover mode (`-d`)
+### Discover mode (`-D`)
 
 1. Reads `[sso-session]` from `~/.aws/config`
 2. Uses the cached SSO token from `aws sso login`
@@ -92,6 +102,25 @@ sso_account_id = 222222222222
 sso_role_name = ReadOnlyAccess
 region = ap-northeast-1
 ```
+
+## sshm config file
+
+`~/.config/sshm/config.yml` lets you define short aliases for SSM document names:
+
+```yaml
+documents:
+  admin: SSM-SessionManagerRunShellAsAdmin
+  readonly: SSM-SessionManagerRunShellAsReadOnly
+```
+
+Use the alias with `-d`:
+
+```bash
+sshm -d admin        # resolves to SSM-SessionManagerRunShellAsAdmin
+sshm -d              # lists all configured aliases
+```
+
+If the name is not found in the map it is passed through as-is, so full document names always work.
 
 ## Cache
 
