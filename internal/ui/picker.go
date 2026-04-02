@@ -2,10 +2,12 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"golang.org/x/term"
 )
 
 // PickerItem is an item that can be shown in the picker.
@@ -125,6 +127,13 @@ func (m pickerModel) View() string {
 
 // Pick shows an interactive picker and returns the selected item ID.
 func Pick(title string, items []PickerItem) (string, error) {
+	fd := int(os.Stdin.Fd())
+	if term.IsTerminal(fd) {
+		if state, err := term.GetState(fd); err == nil {
+			defer term.Restore(fd, state) //nolint:errcheck
+		}
+	}
+
 	p := tea.NewProgram(newPickerModel(title, items))
 	result, err := p.Run()
 	if err != nil {
